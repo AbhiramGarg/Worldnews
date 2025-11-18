@@ -5,7 +5,7 @@ import { FeatureCollection } from 'geojson';
 
 // Define constants for the design
 const NAVBAR_HEIGHT = '60px'; 
-const MAP_CONTENT_OCCUPANCY = '90%'; // Map content will fill 90% of the main area's width/height
+const MAP_CONTENT_OCCUPANCY = '100%'; // Map content will fill 100% of the main area's width/height
 
 // Type assertion for data (assuming data.ts was fixed as discussed)
 const data = rawData as FeatureCollection;
@@ -62,18 +62,29 @@ const Home = () => {
         }}>Interactive World Map</h1>
         
         {/* 4. Map Wrapper: Constrains the map to occupy 90% of the available space */}
-        <div 
-          style={{ 
-            // Occupy 90% of the main area's width and height
-            width: MAP_CONTENT_OCCUPANCY,
-            height: MAP_CONTENT_OCCUPANCY,
-            // Limit the max size to keep it from overwhelming huge screens
-            maxWidth: '1400px', 
-            maxHeight: '800px', // Prevents extreme vertical stretching
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            width: '100%',
+            height: '100%',
+            flex: 1,
           }}
-        > 
-          {/* ResponsiveMap uses this 90% space to render the largest possible centered map */}
-          <ResponsiveMap data={data} />
+        >
+          <div
+            style={{
+              width: MAP_CONTENT_OCCUPANCY,
+              height: MAP_CONTENT_OCCUPANCY,
+              maxWidth: '2400px',
+              maxHeight: '1400px',
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
+            }}
+          >
+            <ResponsiveMap data={data} />
+          </div>
         </div>
       </main>
     </div>
