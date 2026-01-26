@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    container_name: worldnews_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: worldnews_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Admin
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./client/prisma/migrations:/docker-entrypoint-initdb.d/migrations
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d worldnews_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: worldnews_client
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:Admin@db:5432/worldnews_dev
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+    command: npm run dev
+
+volumes:
+  postgres_data:
