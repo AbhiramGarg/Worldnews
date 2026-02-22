@@ -4,6 +4,7 @@
 import * as d3 from 'd3';
 import { FeatureCollection } from 'geojson';
 import React, { useRef, useState, useEffect, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 
 // --- Reusable Hook for Component Dimensions ---
 const useResizeObserver = (ref: React.RefObject<HTMLDivElement>) => {
@@ -46,12 +47,26 @@ const INTERACTIVE_COUNTRY_CODES = [
   'CHE', 'AUT', 'CZE', 'HUN', 'GRC', 'PRT', 'ROU', 'SRB', 'DNK', 'IRL',
 ];
 
+// ISO3 -> ISO2 map for navigation (only includes codes used in INTERACTIVE_COUNTRY_CODES)
+const ISO3_TO_ISO2: Record<string, string> = {
+  USA: 'US', CAN: 'CA', MEX: 'MX', BRA: 'BR', ARG: 'AR', GBR: 'GB', FRA: 'FR', DEU: 'DE', ITA: 'IT', ESP: 'ES',
+  RUS: 'RU', CHN: 'CN', IND: 'IN', JPN: 'JP', KOR: 'KR', AUS: 'AU', ZAF: 'ZA', EGY: 'EG', TUR: 'TR', SAU: 'SA',
+  IRN: 'IR', ISR: 'IL', UKR: 'UA', PAK: 'PK', IDN: 'ID', THA: 'TH', VNM: 'VN', PHL: 'PH', NGA: 'NG', ETH: 'ET',
+  KEN: 'KE', COL: 'CO', PER: 'PE', CHL: 'CL', SWE: 'SE', NOR: 'NO', FIN: 'FI', POL: 'PL', NLD: 'NL', BEL: 'BE',
+  CHE: 'CH', AUT: 'AT', CZE: 'CZ', HUN: 'HU', GRC: 'GR', PRT: 'PT', ROU: 'RO', SRB: 'RS', DNK: 'DK', IRL: 'IE',
+};
+
 // Map component logic remains D3-based computation
 
 export const Map = React.memo(({ width, height, data }: MapProps) => {
   // Track which country is hovered and mouse position
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [tooltip, setTooltip] = useState<{ name: string; x: number; y: number } | null>(null);
+  const [isMobileView, setIsMobileView] = useState(false);
+  const [currentTransform, setCurrentTransform] = useState(d3.zoomIdentity);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const mapGroupRef = useRef<SVGGElement>(null);
+  const zoomBehaviorRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
 
   // Build a Set of available country IDs in the data for fast lookup
   const availableCountryIds = useMemo(() => {
@@ -64,6 +79,170 @@ export const Map = React.memo(({ width, height, data }: MapProps) => {
       INTERACTIVE_COUNTRY_CODES.filter((code: string) => availableCountryIds.has(code))
     );
   }, [availableCountryIds]);
+
+  const router = useRouter();
+
+  const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+  const projectedCountries = useMemo(() => {
+    if (width <= 0 || height <= 0) return [] as Array<{
+      id: string;
+      name: string;
+      centroid: [number, number];
+      bounds: [[number, number], [number, number]];
+      isInteractive: boolean;
+    }>;
+
+    const projection = d3.geoMercator().fitSize([width, height], data);
+    const geoPathGenerator = d3.geoPath().projection(projection);
+
+    return data.features
+      .filter((shape) => (shape as { id: string }).id !== 'ATA')
+      .map((shape) => {
+        const id = (shape as { id: string }).id;
+        const centroidRaw = geoPathGenerator.centroid(shape as any);
+        const bounds = geoPathGenerator.bounds(shape as any);
+        const centroid: [number, number] = [centroidRaw[0], centroidRaw[1]];
+        return {
+          id,
+          name: (shape as any).properties?.name || id,
+          centroid,
+          bounds,
+          isInteractive: interactiveSet.has(id),
+        };
+      })
+      .filter((entry) => Number.isFinite(entry.centroid[0]) && Number.isFinite(entry.centroid[1]));
+  }, [width, height, data, interactiveSet]);
+
+  const mobileLabelCountries = useMemo(() => {
+    if (!isMobileView || projectedCountries.length === 0) {
+      return [] as Array<{ id: string; name: string; centroid: [number, number] }>;
+    }
+
+    if (currentTransform.k <= 1.15) {
+      const anchorIds = ['USA', 'BRA', 'DEU', 'IND', 'AUS'];
+      return anchorIds
+        .map((id) => projectedCountries.find((country) => country.id === id))
+        .filter((country): country is { id: string; name: string; centroid: [number, number]; bounds: [[number, number], [number, number]]; isInteractive: boolean } => Boolean(country))
+        .map(({ id, name, centroid }) => ({ id, name, centroid }));
+    }
+
+    const inView = projectedCountries
+      .filter((country) => country.isInteractive)
+      .filter((country) => {
+        const [[minX, minY], [maxX, maxY]] = country.bounds;
+        const tMinX = currentTransform.applyX(minX);
+        const tMinY = currentTransform.applyY(minY);
+        const tMaxX = currentTransform.applyX(maxX);
+        const tMaxY = currentTransform.applyY(maxY);
+        return tMinX >= 0 && tMinY >= 0 && tMaxX <= width && tMaxY <= height;
+      })
+      .map(({ id, name, centroid }) => ({
+        id,
+        name,
+        centroid,
+        sx: currentTransform.applyX(centroid[0]),
+        sy: currentTransform.applyY(centroid[1]),
+      }));
+
+    const maxLabels = currentTransform.k >= 5 ? 14 : currentTransform.k >= 3 ? 10 : 8;
+    const minScreenDistance = currentTransform.k >= 5 ? 22 : currentTransform.k >= 3 ? 28 : 36;
+    const selected: Array<{ id: string; name: string; centroid: [number, number]; sx: number; sy: number }> = [];
+
+    for (const country of inView) {
+      const overlaps = selected.some((picked) => {
+        const dx = picked.sx - country.sx;
+        const dy = picked.sy - country.sy;
+        return Math.hypot(dx, dy) < minScreenDistance;
+      });
+
+      if (!overlaps) {
+        selected.push(country);
+      }
+
+      if (selected.length >= maxLabels) break;
+    }
+
+    return selected.map(({ id, name, centroid }) => ({ id, name, centroid }));
+  }, [isMobileView, projectedCountries, currentTransform, width, height]);
+
+  const mobileLabelFontSize = useMemo(() => {
+    if (currentTransform.k <= 1.15) return 5;
+    return clamp(8 / Math.sqrt(currentTransform.k), 4, 6.5);
+  }, [currentTransform.k]);
+
+  const mobileLabelStrokeWidth = useMemo(() => {
+    return clamp(1.8 / Math.sqrt(Math.max(currentTransform.k, 1)), 0.6, 1.2);
+  }, [currentTransform.k]);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 768px)');
+    const apply = () => setIsMobileView(mq.matches);
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, []);
+
+  useEffect(() => {
+    if (!svgRef.current || !mapGroupRef.current || width <= 0 || height <= 0) return;
+
+    const svgSelection = d3.select(svgRef.current);
+    const groupSelection = d3.select(mapGroupRef.current);
+
+    const zoomBehavior = d3
+      .zoom<SVGSVGElement, unknown>()
+      .scaleExtent([1, 8])
+      .translateExtent([
+        [0, 0],
+        [width, height],
+      ])
+      .extent([
+        [0, 0],
+        [width, height],
+      ])
+      .on('zoom', (event) => {
+        groupSelection.attr('transform', event.transform.toString());
+        setCurrentTransform(event.transform);
+      });
+
+    zoomBehaviorRef.current = zoomBehavior;
+
+    svgSelection.call(zoomBehavior as any);
+
+    const mobileStartScale = isMobileView ? 1.8 : 1;
+    const initialTransform = d3.zoomIdentity
+      .translate((width - width * mobileStartScale) / 2, (height - height * mobileStartScale) / 2)
+      .scale(mobileStartScale);
+    svgSelection.call(zoomBehavior.transform as any, initialTransform);
+
+    return () => {
+      svgSelection.on('.zoom', null);
+    };
+  }, [width, height, data, isMobileView]);
+
+  const handleZoomIn = () => {
+    if (!svgRef.current || !zoomBehaviorRef.current) return;
+    d3.select(svgRef.current)
+      .transition()
+      .duration(180)
+      .call(zoomBehaviorRef.current.scaleBy as any, 1.35);
+  };
+
+  const handleZoomOut = () => {
+    if (!svgRef.current || !zoomBehaviorRef.current) return;
+    d3.select(svgRef.current)
+      .transition()
+      .duration(180)
+      .call(zoomBehaviorRef.current.scaleBy as any, 1 / 1.35);
+  };
+
+  const handleResetZoom = () => {
+    if (!svgRef.current || !zoomBehaviorRef.current) return;
+    d3.select(svgRef.current)
+      .transition()
+      .duration(220)
+      .call(zoomBehaviorRef.current.transform as any, d3.zoomIdentity);
+  };
 
   const allSvgPaths = useMemo(() => {
     if (width <= 0 || height <= 0) return null;
@@ -86,15 +265,15 @@ export const Map = React.memo(({ width, height, data }: MapProps) => {
           ? {
               cursor: 'pointer',
               transition: 'filter 0.2s, fill 0.2s, stroke 0.2s',
-              fill: isHovered ? '#00FFFF' : 'grey', // Neon blue on hover, grey otherwise
-              stroke: isHovered ? '#00FFFF' : 'lightGrey',
+              fill: isHovered ? 'var(--map-hover)' : 'var(--map-country-fill)',
+              stroke: isHovered ? 'var(--map-hover)' : 'var(--map-country-stroke)',
               strokeWidth: isHovered ? 2 : 0.5,
-              filter: isHovered ? 'drop-shadow(0px 0px 8px #00FFFF)' : 'none',
+              filter: isHovered ? 'drop-shadow(0px 0px 8px var(--map-hover-shadow))' : 'none',
               fillOpacity: isHovered ? 0.95 : 0.7,
             }
           : {
-              fill: 'grey',
-              stroke: 'lightGrey',
+              fill: 'var(--map-country-fill)',
+              stroke: 'var(--map-country-stroke)',
               strokeWidth: 0.5,
               fillOpacity: 0.7,
               cursor: 'default',
@@ -102,6 +281,7 @@ export const Map = React.memo(({ width, height, data }: MapProps) => {
         // Tooltip handlers
         const handleMouseEnter = isInteractive
           ? (e: React.MouseEvent<SVGPathElement>) => {
+              if (isMobileView) return;
               setHoveredId(id);
               const name = (shape as any).properties?.name || id;
               setTooltip({
@@ -113,6 +293,7 @@ export const Map = React.memo(({ width, height, data }: MapProps) => {
           : undefined;
         const handleMouseMove = isInteractive
           ? (e: React.MouseEvent<SVGPathElement>) => {
+              if (isMobileView) return;
               setTooltip(prev => prev ? {
                 ...prev,
                 x: e.clientX,
@@ -122,8 +303,18 @@ export const Map = React.memo(({ width, height, data }: MapProps) => {
           : undefined;
         const handleMouseLeave = isInteractive
           ? () => {
+              if (isMobileView) return;
               setHoveredId(null);
               setTooltip(null);
+            }
+          : undefined;
+        const handleClick = isInteractive
+          ? () => {
+              const iso2 = ISO3_TO_ISO2[id];
+              if (iso2) {
+                // navigate to filters page and apply country + all topic + all category
+                router.push(`/filter?country=${iso2.toLowerCase()}&category=all`);
+              }
             }
           : undefined;
         return (
@@ -134,6 +325,7 @@ export const Map = React.memo(({ width, height, data }: MapProps) => {
             onMouseEnter={handleMouseEnter}
             onMouseMove={handleMouseMove}
             onMouseLeave={handleMouseLeave}
+            onClick={handleClick}
           />
         );
       });
@@ -141,10 +333,104 @@ export const Map = React.memo(({ width, height, data }: MapProps) => {
 
   return (
     <div style={{ position: 'relative', width, height }}>
-      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block' }}>
-        {allSvgPaths}
+      <svg
+        ref={svgRef}
+        width={width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        style={{ display: 'block', touchAction: 'none' }}
+      >
+        <g ref={mapGroupRef}>
+          {allSvgPaths}
+          {isMobileView &&
+            mobileLabelCountries.map((country) => (
+              <text
+                key={`label-${country.id}`}
+                x={country.centroid[0]}
+                y={country.centroid[1]}
+                textAnchor="middle"
+                style={{
+                  fill: '#f8fafc',
+                  fontSize: `${mobileLabelFontSize}px`,
+                  fontWeight: 700,
+                  paintOrder: 'stroke',
+                  stroke: 'rgba(15, 23, 42, 0.9)',
+                  strokeWidth: mobileLabelStrokeWidth,
+                  pointerEvents: 'none',
+                  userSelect: 'none',
+                }}
+              >
+                {country.name}
+              </text>
+            ))}
+        </g>
       </svg>
-      {tooltip && (
+      {isMobileView && (
+        <div
+          style={{
+            position: 'absolute',
+            right: 10,
+            bottom: 10,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+            zIndex: 20,
+          }}
+        >
+          <button
+            onClick={handleZoomIn}
+            aria-label="Zoom in"
+            style={{
+              width: 42,
+              height: 42,
+              borderRadius: 10,
+              border: '1px solid var(--border-color)',
+              background: 'var(--surface)',
+              color: 'var(--text-primary)',
+              fontSize: '1.2rem',
+              fontWeight: 700,
+              boxShadow: '0 4px 10px var(--shadow-color)',
+            }}
+          >
+            +
+          </button>
+          <button
+            onClick={handleZoomOut}
+            aria-label="Zoom out"
+            style={{
+              width: 42,
+              height: 42,
+              borderRadius: 10,
+              border: '1px solid var(--border-color)',
+              background: 'var(--surface)',
+              color: 'var(--text-primary)',
+              fontSize: '1.2rem',
+              fontWeight: 700,
+              boxShadow: '0 4px 10px var(--shadow-color)',
+            }}
+          >
+            −
+          </button>
+          <button
+            onClick={handleResetZoom}
+            aria-label="Reset zoom"
+            style={{
+              width: 42,
+              height: 32,
+              borderRadius: 10,
+              border: '1px solid var(--border-color)',
+              background: 'var(--surface-muted)',
+              color: 'var(--text-secondary)',
+              fontSize: '0.72rem',
+              fontWeight: 700,
+              boxShadow: '0 4px 10px var(--shadow-color)',
+            }}
+          >
+            Reset
+          </button>
+        </div>
+      )}
+      {!isMobileView && tooltip && (
         <div
           style={{
             position: 'fixed',
@@ -172,6 +458,15 @@ export const Map = React.memo(({ width, height, data }: MapProps) => {
 export const ResponsiveMap = ({ data }: { data: FeatureCollection }) => {
   const containerRef = useRef<HTMLDivElement>(null) as React.RefObject<HTMLDivElement>;
   const { width: containerWidth, height: containerHeight } = useResizeObserver(containerRef);
+  const [isMobileView, setIsMobileView] = useState(false);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 768px)');
+    const apply = () => setIsMobileView(mq.matches);
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, []);
   
   // Target Aspect Ratio (700 wide / 400 high = 1.75)
   const TARGET_ASPECT_RATIO = 1.75; 
@@ -180,16 +475,21 @@ export const ResponsiveMap = ({ data }: { data: FeatureCollection }) => {
   let mapHeight = 0;
 
   if (containerWidth > 0 && containerHeight > 0) {
-    const calculatedHeightBasedOnWidth = containerWidth / TARGET_ASPECT_RATIO;
-
-    if (calculatedHeightBasedOnWidth > containerHeight) {
-      // The map is taller than the container (Height is the limiting factor)
-      mapHeight = containerHeight;
-      mapWidth = containerHeight * TARGET_ASPECT_RATIO;
-    } else {
-      // The map is wider than the container (Width is the limiting factor)
+    if (isMobileView) {
       mapWidth = containerWidth;
-      mapHeight = calculatedHeightBasedOnWidth;
+      mapHeight = containerHeight;
+    } else {
+      const calculatedHeightBasedOnWidth = containerWidth / TARGET_ASPECT_RATIO;
+
+      if (calculatedHeightBasedOnWidth > containerHeight) {
+        // The map is taller than the container (Height is the limiting factor)
+        mapHeight = containerHeight;
+        mapWidth = containerHeight * TARGET_ASPECT_RATIO;
+      } else {
+        // The map is wider than the container (Width is the limiting factor)
+        mapWidth = containerWidth;
+        mapHeight = calculatedHeightBasedOnWidth;
+      }
     }
   }
 

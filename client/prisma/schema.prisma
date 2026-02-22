@@ -24,6 +24,7 @@ model NewsArticle {
   language        String    @db.VarChar(10)
   author          String?
   authors         String[]
+  category        String    @db.VarChar(50) @default("general")
   createdAt       DateTime  @default(now())
 
   @@map("news_article")
