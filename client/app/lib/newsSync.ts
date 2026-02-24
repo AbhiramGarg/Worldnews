@@ -1,5 +1,3 @@
-import { writeFile } from 'fs/promises';
-import { join } from 'path';
 import { ApiArticleSchema } from '@/lib/Validation';
 import {
   connectToDatabase,
@@ -10,14 +8,17 @@ import {
 const baseurl = 'https://api.worldnewsapi.com/search-news';
 
 const earlybirds = [
-  'gb', 'fr', 'de', 'it', 'es', 'ru', 'cn', 'in', 'jp', 'kr',
-  'au', 'za', 'eg', 'tr', 'sa', 'ir', 'il', 'ua', 'pk', 'id',
-  'th', 'vn', 'ph', 'ng', 'et', 'ke', 'se', 'no', 'fi', 'pl',
-  'nl', 'be', 'ch', 'at', 'cz', 'hu', 'gr', 'pt', 'ro', 'rs',
-  'dk', 'ie',
+  'gb', 
+  // 'fr', 'de', 'it', 'es', 'ru', 'cn', 'in', 'jp', 'kr',
+  // 'au', 'za', 'eg', 'tr', 'sa', 'ir', 'il', 'ua', 'pk', 'id',
+  // 'th', 'vn', 'ph', 'ng', 'et', 'ke', 'se', 'no', 'fi', 'pl',
+  // 'nl', 'be', 'ch', 'at', 'cz', 'hu', 'gr', 'pt', 'ro', 'rs',
+  // 'dk', 'ie',
 ];
 
-const latecomers = ['us', 'ca', 'mx', 'br', 'ar', 'co', 'pe', 'cl'];
+const latecomers = ['us', 
+  // 'ca', 'mx', 'br', 'ar', 'co', 'pe', 'cl'
+  ];
 
 const categories = ['business', 'entertainment', 'politics', 'sports', 'technology'];
 
@@ -93,9 +94,6 @@ export async function runNewsSync(window: SyncWindow) {
 
   const countries = getCountries(window);
   const allNews = await fetchNewsForCountries(countries, apiKey);
-
-  const filePath = join(process.cwd(), 'data.json');
-  await writeFile(filePath, JSON.stringify(allNews, null, 2));
 
   let savedCount = 0;
   let dbMode: 'delete-and-insert' | 'insert-only' = 'insert-only';

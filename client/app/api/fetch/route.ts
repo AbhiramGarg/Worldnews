@@ -8,12 +8,14 @@ function parseWindow(value: string | null): SyncWindow | null {
 }
 
 function isAuthorized(req: Request, url: URL): boolean {
-  const configuredToken = process.env.SCHEDULER_TOKEN;
+  const configuredToken = process.env.CRON_SECRET;
   if (!configuredToken) return true;
 
-  const headerToken = req.headers.get('x-scheduler-token');
-  const queryToken = url.searchParams.get('token');
-  return headerToken === configuredToken || queryToken === configuredToken;
+  const authHeader = req.headers.get('authorization');
+  if (!authHeader) return false;
+
+  const expectedValue = `Bearer ${configuredToken}`;
+  return authHeader === expectedValue;
 }
 
 async function handleSchedulerRequest(req: Request) {
