@@ -2,10 +2,36 @@ import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
+import { createHash } from 'crypto';
+
+function buildFallbackApiId(article: any): bigint {
+    const seed = [
+        String(article.url ?? article.link ?? ''),
+        String(article.title ?? ''),
+        String(article.publish_date ?? article.publishDate ?? article.published_at ?? ''),
+        String(article.sourceCountry ?? article.source_country ?? ''),
+    ].join('|');
+
+    const hashHex = createHash('sha256').update(seed).digest('hex');
+    return BigInt('0x' + hashHex.slice(0, 16));
+}
+
+function normalizeApiId(article: any): bigint {
+    const rawId = article.id ?? article.apiId ?? article.news_id;
+
+    if (rawId != null) {
+        try {
+            return BigInt(rawId);
+        } catch {
+            return buildFallbackApiId(article);
+        }
+    }
+
+    return buildFallbackApiId(article);
+}
 
 function transformArticles(articles: any[]) {
     return articles.map((a: any) => {
-        const idVal = a.id ?? a.apiId ?? a.news_id ?? null;
         const publishRaw = a.publish_date ?? a.publishDate ?? a.published_at ?? null;
         let publishDate = new Date();
         if (publishRaw) {
@@ -21,7 +47,7 @@ function transformArticles(articles: any[]) {
         const category = String(a.category ?? a.cat ?? 'general').toLowerCase();
 
         return {
-            apiId: idVal != null ? BigInt(idVal) : BigInt(0),
+            apiId: normalizeApiId(a),
             title: a.title ?? '',
             text: a.text ?? '',
             summary: a.summary ?? null,
