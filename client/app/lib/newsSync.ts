@@ -9,15 +9,15 @@ const baseurl = 'https://api.worldnewsapi.com/search-news';
 
 const earlybirds = [
   'gb', 
-  // 'fr', 'de', 'it', 'es', 'ru', 'cn', 'in', 'jp', 'kr',
-  // 'au', 'za', 'eg', 'tr', 'sa', 'ir', 'il', 'ua', 'pk', 'id',
-  // 'th', 'vn', 'ph', 'ng', 'et', 'ke', 'se', 'no', 'fi', 'pl',
-  // 'nl', 'be', 'ch', 'at', 'cz', 'hu', 'gr', 'pt', 'ro', 'rs',
-  // 'dk', 'ie',
+  'fr', 'de', 'it', 'es', 'ru', 'cn', 'in', 'jp', 'kr',
+  'au', 'za', 'eg', 'tr', 'sa', 'ir', 'il', 'ua', 'pk', 'id',
+  'th', 'vn', 'ph', 'ng', 'et', 'ke', 'se', 'no', 'fi', 'pl',
+  'nl', 'be', 'ch', 'at', 'cz', 'hu', 'gr', 'pt', 'ro', 'rs',
+  'dk', 'ie',
 ];
 
 const latecomers = ['us', 
-  // 'ca', 'mx', 'br', 'ar', 'co', 'pe', 'cl'
+  'ca', 'mx', 'br', 'ar', 'co', 'pe', 'cl'
   ];
 
 const categories = ['business', 'entertainment', 'politics', 'sports', 'technology'];
