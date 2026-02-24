@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { runNewsSync, type SyncWindow } from '@/app/lib/newsSync';
 
+export const runtime = 'nodejs';
+
 function parseWindow(value: string | null): SyncWindow | null {
   if (value === null || value === 'earlybirds') return 'earlybirds';
   if (value === 'latecomers') return 'latecomers';

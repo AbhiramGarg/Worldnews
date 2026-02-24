@@ -48,35 +48,38 @@ export async function connectToDatabase(): Promise<PrismaClient> {
         throw new Error('DATABASE_URL environment variable is not set');
     }
 
-    // Parse the DATABASE_URL to extract connection details
     const url = new URL(connectionString);
-    const host = url.hostname;
-    const port = parseInt(url.port) || 5432;
-    const user = url.username;
-    const password = url.password;
-    const dbName = url.pathname.slice(1); // Remove leading '/'
+    const dbName = url.pathname.replace(/^\//, '');
+    const isNeon = url.hostname.includes('neon.tech');
 
-    // Connect to the default 'postgres' database to check/create the target database
-    const postgresConnectionString = `postgresql://${user}:${password}@${host}:${port}/postgres`;
-    const pool = new pg.Pool({ connectionString: postgresConnectionString });
+    // Managed providers like Neon already provision databases and require SSL.
+    // Skip create/check there to avoid insecure admin connections and privilege issues.
+    if (!isNeon) {
+        const adminUrl = new URL(connectionString);
+        adminUrl.pathname = '/postgres';
 
-    try {
-        const client = await pool.connect();
-        // Check if the database exists
-        const res = await client.query("SELECT 1 FROM pg_database WHERE datname = $1", [dbName]);
-        if (res.rows.length === 0) {
-            // Create the database if it doesn't exist
-            await client.query(`CREATE DATABASE "${dbName}"`);
-            console.log(`Database '${dbName}' created successfully.`);
-        } else {
-            console.log(`Database '${dbName}' already exists.`);
+        const pool = new pg.Pool({ connectionString: adminUrl.toString() });
+        let client: pg.PoolClient | null = null;
+
+        try {
+            client = await pool.connect();
+            const res = await client.query("SELECT 1 FROM pg_database WHERE datname = $1", [dbName]);
+            if (res.rows.length === 0) {
+                await client.query(`CREATE DATABASE "${dbName}"`);
+                console.log(`Database '${dbName}' created successfully.`);
+            } else {
+                console.log(`Database '${dbName}' already exists.`);
+            }
+        } catch (error) {
+            console.warn('Skipping database check/create step and continuing with direct connection:', error);
+        } finally {
+            if (client) {
+                client.release();
+            }
+            await pool.end();
         }
-        client.release();
-    } catch (error) {
-        console.error('Error checking or creating database:', error);
-        throw error;
-    } finally {
-        await pool.end();
+    } else {
+        console.log('Neon detected; skipping database check/create step.');
     }
 
     // Now connect to the target database using Prisma
