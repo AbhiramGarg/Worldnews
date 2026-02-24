@@ -11,13 +11,21 @@ function parseWindow(value: string | null): SyncWindow | null {
 
 function isAuthorized(req: Request, url: URL): boolean {
   const configuredToken = process.env.CRON_SECRET;
+  
+  // If no secret is set, we bypass (useful for local dev)
   if (!configuredToken) return true;
 
   const authHeader = req.headers.get('authorization');
-  if (!authHeader) return false;
-
   const expectedValue = `Bearer ${configuredToken}`;
-  return authHeader === expectedValue;
+
+  if (authHeader !== expectedValue) {
+    console.error("CRON AUTH FAILED");
+    console.error("Received:", authHeader);
+    console.error("Expected:", expectedValue);
+    return false;
+  }
+
+  return true;
 }
 
 async function handleSchedulerRequest(req: Request) {
@@ -34,6 +42,7 @@ async function handleSchedulerRequest(req: Request) {
         { status: 400 }
       );
     }
+
 
     const result = await runNewsSync(window);
 
