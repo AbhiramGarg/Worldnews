@@ -31,6 +31,8 @@ function isAuthorized(req: Request, url: URL): boolean {
 async function handleSchedulerRequest(req: Request) {
   try {
     const url = new URL(req.url);
+    const headersObj = Object.fromEntries(req.headers.entries());
+    console.log("All incoming headers:", JSON.stringify(headersObj, null, 2));
     if (!isAuthorized(req, url)) {
       return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
     }
