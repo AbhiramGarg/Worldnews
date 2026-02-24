@@ -1,102 +1,113 @@
 # WorldNews
 
-A full-stack news application built with Next.js, Prisma, and PostgreSQL.
+WorldNews is a Next.js 16 application that fetches news from a third-party API, validates/sanitizes the payload, and stores articles in PostgreSQL via Prisma.
 
-## Getting Started
+## Current Architecture
 
-### Prerequisites
-- Docker and Docker Compose
-- Node.js 22+ (for local development)
+- App: `client/` (Next.js App Router, TypeScript)
+- Database: external PostgreSQL (not containerized by this repo)
+- ORM: Prisma (`@prisma/client` + `@prisma/adapter-pg`)
+- Container runtime: client-only via `docker-compose.yml`
+- Scheduler options:
+  - Internal in-app scheduler (`INTERNAL_SCHEDULER_ENABLED=true` in current compose)
+  - External scheduler via Vercel cron (`client/vercel.json`)
 
-### Running with Docker (Recommended)
+## Environment Variables
 
-**Prerequisites**: Make sure Docker Desktop is running on your system.
+For Docker Compose (`docker-compose.yml`), define these in root `.env`:
 
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd WorldNews
-   ```
-
-2. **Start the application**
-   ```bash
-   # Option 1: Using batch file (Windows)
-   start-docker.bat
-
-   # Option 2: Using docker-compose directly
-   docker-compose up --build -d
-   ```
-
-   This will:
-   - Start a PostgreSQL database on port 5432
-   - Build and start the Next.js application on port 3000
-   - Run database migrations automatically
-
-3. **Access the application**
-   - Frontend: http://localhost:3000
-   - Database: localhost:5432 (accessible from host)
-
-4. **View logs**
-   ```bash
-   docker-compose logs -f
-   ```
-
-5. **Stop services**
-   ```bash
-   # Option 1: Using batch file (Windows)
-   stop-docker.bat
-
-   # Option 2: Using docker-compose directly
-   docker-compose down
-   ```
-
-### Local Development
-
-1. **Install dependencies**
-   ```bash
-   cd client
-   npm install
-   ```
-
-2. **Set up PostgreSQL**
-   - Install PostgreSQL locally
-   - Create database: `worldnews_dev`
-   - Update `.env` with your database URL
-
-3. **Run database migrations**
-   ```bash
-   npx prisma generate
-   npx prisma db push
-   ```
-
-4. **Start development server**
-   ```bash
-   npm run dev
-   ```
-
-### Testing
-
-Run the test scripts to verify database connectivity:
-
-```bash
-# Insert test data
-npx tsx test/seed.mjs
-
-# Fetch test data
-npx tsx test/test-fetch.ts
+```env
+DATABASE_URL=postgresql://<user>:<password>@<host>:5432/<database>
+WORLD_NEWS_API_KEY=<world_news_api_key>
 ```
 
-## Project Structure
+For local Next.js runtime (`client/.env`), define:
 
-- `client/` - Next.js frontend application
-- `client/prisma/` - Database schema and migrations
-- `client/test/` - Database testing scripts
-- `docker-compose.yml` - Docker orchestration
-- `client/Dockerfile` - Next.js container configuration
+```env
+DATABASE_URL=postgresql://<user>:<password>@<host>:5432/<database>
+WORLD_NEWS_API_KEY=<world_news_api_key>
+CRON_SECRET=<strong_random_secret>
+```
 
-## Technologies Used
+Notes:
+- In Docker Desktop on Windows/macOS, use `host.docker.internal` as `<host>` when DB runs on your machine.
+- `CRON_SECRET` protects `/api/fetch` when scheduler auth is enabled.
 
-- **Frontend**: Next.js 16, React 19, TypeScript
-- **Database**: PostgreSQL with Prisma ORM
-- **Styling**: Tailwind CSS
-- **Containerization**: Docker & Docker Compose
+## Run with Docker (Client-Only, Stateless)
+
+Prerequisite: Docker Desktop must be running.
+
+```bash
+docker compose up -d --build client
+```
+
+Useful commands:
+
+```bash
+docker logs -f worldnews_client
+docker compose down
+```
+
+App URL: `http://localhost:3000`
+
+## Run Locally (Node.js)
+
+```bash
+cd client
+npm install
+npx prisma generate
+npm run dev
+```
+
+If schema setup is needed:
+
+```bash
+npx prisma db push
+# or
+npx prisma migrate deploy
+```
+
+## Scheduler & API Endpoints
+
+### Fetch Sync Endpoint
+
+- Route: `/api/fetch`
+- Methods: `GET` and `POST`
+- Query:
+  - `window=earlybirds`
+  - `window=latecomers`
+- Default behavior: if `window` is omitted, it runs `earlybirds`.
+
+### Auth for `/api/fetch`
+
+In `client/app/api/fetch/route.ts`, when `CRON_SECRET` is set, requests must include:
+
+```http
+Authorization: Bearer <CRON_SECRET>
+```
+
+If `CRON_SECRET` is not set, auth check is bypassed.
+
+### Vercel Cron (External Scheduler)
+
+Configured in `client/vercel.json`:
+
+- `30 1 * * *` → `/api/fetch?window=earlybirds`
+- `30 13 * * *` → `/api/fetch?window=latecomers`
+
+Make sure `CRON_SECRET` is also set in Vercel project environment variables.
+
+## Data Flow Summary
+
+1. `/api/fetch` is triggered (manual call, internal scheduler, or Vercel cron).
+2. `runNewsSync(window)` fetches third-party news by country group.
+3. Payload is validated with `ApiArticleSchema`.
+4. Database write strategy:
+   - `earlybirds` → delete existing + insert fresh batch
+   - `latecomers` → insert-only (dedupe via `skipDuplicates`)
+
+## Important Current Behaviors
+
+- The app attempts to create the target DB if it does not exist (`client/db/postgres_db.ts`).
+- DB connectivity errors are runtime errors (for example, wrong host/credentials, DB unavailable), not image build errors.
+- `client/vercel.json` is used only by Vercel deployment, not by local Docker Compose.
