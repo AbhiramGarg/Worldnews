@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/fetch?window=earlybirds",
-      "schedule": "0 21 * * *"
+      "schedule": "35 16 * * *"
     },
     {
       "path": "/api/fetch?window=latecomers",
