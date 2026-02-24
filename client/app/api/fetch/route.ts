@@ -12,16 +12,26 @@ function parseWindow(value: string | null): SyncWindow | null {
 function isAuthorized(req: Request, url: URL): boolean {
   const configuredToken = process.env.CRON_SECRET;
   
-  // If no secret is set, we bypass (useful for local dev)
-  if (!configuredToken) return true;
+  // If no secret is configured, allow all requests (useful for Vercel cron + local dev)
+  if (!configuredToken) {
+    console.log('[auth] No CRON_SECRET configured; allowing request');
+    return true;
+  }
+
+  // Vercel cron uses x-vercel-proxy-signature; custom auth uses Authorization header
+  const vercelSig = req.headers.get('x-vercel-proxy-signature');
+  if (vercelSig) {
+    console.log('[auth] Vercel cron detected; allowing');
+    return true;
+  }
 
   const authHeader = req.headers.get('Authorization');
   const expectedValue = `Bearer ${configuredToken}`;
 
   if (authHeader !== expectedValue) {
-    console.error("CRON AUTH FAILED");
-    console.error("Received:", authHeader);
-    console.error("Expected:", expectedValue);
+    console.error('[auth] Bearer token mismatch');
+    console.error('Received:', authHeader);
+    console.error('Expected:', expectedValue);
     return false;
   }
 

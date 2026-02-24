@@ -6,11 +6,11 @@ export const ApiArticleSchema = z
   .object({
     title: cleanString,
     text: cleanString,
-    url: z.string().trim().url(),
-    image: z.string().trim().url(),
+    url: z.string().trim().url().optional(),
+    image: z.string().trim().url().optional(),
     publish_date: cleanString,
     category: cleanString,
-    summary: cleanString,
+    summary: cleanString.optional(),
     language: z.literal("en"),
     source_country: cleanString,
   });
