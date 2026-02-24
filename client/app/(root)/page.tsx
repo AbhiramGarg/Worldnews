@@ -4,7 +4,6 @@ import { ResponsiveMap } from './components/Map';
 import { FeatureCollection } from 'geojson'; 
 
 // Define constants for the design
-const NAVBAR_HEIGHT = '60px'; 
 const MAP_CONTENT_OCCUPANCY = '100%'; // Map content will fill 100% of the main area's width/height
 
 // Type assertion for data (assuming data.ts was fixed as discussed)
@@ -12,56 +11,41 @@ const data = rawData as FeatureCollection;
 
 const Home = () => {
   return (
-    // 1. Outer Container: Takes up full viewport height
+    // 1. Outer Container: content below global + page navbars
     <div 
       style={{
-        minHeight: '100vh', 
-        width: '100vw',
+        height: 'calc(100dvh - 64px)',
+        minHeight: 'calc(100dvh - 64px)', 
+        width: '100%',
         display: 'flex',
-        flexDirection: 'column', // Stack Navbar and Content vertically
+        flexDirection: 'column',
+        background: 'var(--background)',
       }}
     >
-      
-      {/* 2. Navbar Placeholder */}
-      <nav 
-        style={{ 
-          height: NAVBAR_HEIGHT, 
-          background: '#333', 
-          color: 'white', 
-          display: 'flex', 
-          alignItems: 'center', 
-          paddingLeft: '20px',
-          // Optional: Add a shadow to make it look distinct
-          boxShadow: '0 2px 4px rgba(0,0,0,0.2)' 
-        }}
-      >
-        World News App Navbar
-      </nav>
-      
-      {/* 3. Main Content Area: Takes up remaining height and centers the map */}
+
+      {/* 2. Main Content Area: centers heading and map */}
       <main 
         style={{
-          // Use calc() to subtract Navbar height from full viewport height
-          height: `calc(100vh - ${NAVBAR_HEIGHT})`, 
+          flex: 1,
+          minHeight: 0,
           width: '100%',
           display: 'flex',
-          // Vertical Centering of all content (heading + map)
           justifyContent: 'center', 
-          // Horizontal Centering of all content (heading + map)
           alignItems: 'center',    
           flexDirection: 'column', 
           boxSizing: 'border-box',
-          overflow: 'hidden', // Prevent scrollbars from popping up due to minor layout issues
+          overflow: 'hidden',
         }}
       >
         <h1 style={{ 
-          marginBottom: '10px', 
-          fontSize: '2em',
+          marginBottom: '6px', 
+          fontSize: 'clamp(1.15rem, 4vw, 2rem)',
+          color: 'var(--text-primary)',
           // Ensure heading is centered horizontally too
           textAlign: 'center' 
         }}>Interactive World Map</h1>
         
-        {/* 4. Map Wrapper: Constrains the map to occupy 90% of the available space */}
+        {/* 3. Map Wrapper */}
         <div
           style={{
             display: 'flex',

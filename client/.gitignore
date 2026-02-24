@@ -12,6 +12,12 @@
 
 # testing
 /coverage
+__tests__/
+test/
+vitest.config.ts
+lib/prisma-test.ts
+**/mocks/
+**/*msw*
 
 # next.js
 /.next/

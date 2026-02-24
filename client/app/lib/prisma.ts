@@ -1,7 +1,13 @@
 // lib/prisma.ts
 
-import { PrismaClient } from '@prisma/client';
+import { connectToDatabase } from '@/db/postgres_db';
+import type { PrismaClient } from '@prisma/client';
 
-const prisma = new PrismaClient();
+let prismaInstance: PrismaClient | null = null;
 
-export default prisma;
+export async function getPrisma(): Promise<PrismaClient> {
+  if (!prismaInstance) {
+    prismaInstance = await connectToDatabase();
+  }
+  return prismaInstance;
+}

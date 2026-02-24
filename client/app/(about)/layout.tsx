@@ -1,11 +1,9 @@
-const Layout = ({children}: {children:  React.ReactNode}) => {
+const Layout = ({ children }: { children: React.ReactNode }) => {
   return (
-   <div>
-    <p>About Navbar</p>
-     {children}
-   </div>
-  
-)
-}
+    <div>
+      {children}
+    </div>
+  );
+};
 
-export default Layout
+export default Layout;

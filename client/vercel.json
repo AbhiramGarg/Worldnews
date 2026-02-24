@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/fetch?window=earlybirds",
+      "schedule": "30 1 * * *"
+    },
+    {
+      "path": "/api/fetch?window=latecomers",
+      "schedule": "30 13 * * *"
+    }
+  ]
+}
