@@ -15,7 +15,7 @@ function isAuthorized(req: Request, url: URL): boolean {
   // If no secret is set, we bypass (useful for local dev)
   if (!configuredToken) return true;
 
-  const authHeader = req.headers.get('authorization');
+  const authHeader = req.headers.get('Authorization');
   const expectedValue = `Bearer ${configuredToken}`;
 
   if (authHeader !== expectedValue) {
