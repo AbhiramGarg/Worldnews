@@ -1,3 +1,4 @@
+import { verifySignatureEdge } from '@upstash/qstash/nextjs';
 import { NextResponse } from 'next/server';
 import { runNewsSync, type SyncWindow } from '@/app/lib/newsSync';
 
@@ -9,45 +10,25 @@ function parseWindow(value: string | null): SyncWindow | null {
   return null;
 }
 
-function isAuthorized(req: Request, url: URL): boolean {
-  const configuredToken = process.env.CRON_SECRET;
-  
-  // If no secret is configured, allow all requests (useful for Vercel cron + local dev)
-  if (!configuredToken) {
-    console.log('[auth] No CRON_SECRET configured; allowing request');
-    return true;
+async function resolveWindow(req: Request, url: URL): Promise<SyncWindow | null> {
+  if (req.method !== 'POST') {
+    return parseWindow(url.searchParams.get('window'));
   }
 
-  // Vercel cron uses x-vercel-proxy-signature; custom auth uses Authorization header
-  const vercelSig = req.headers.get('x-vercel-proxy-signature');
-  if (vercelSig) {
-    console.log('[auth] Vercel cron detected; allowing');
-    return true;
-  }
+  const payload = await req
+    .clone()
+    .json()
+    .catch(() => ({})) as { window?: string };
 
-  const authHeader = req.headers.get('Authorization');
-  const expectedValue = `Bearer ${configuredToken}`;
-
-  if (authHeader !== expectedValue) {
-    console.error('[auth] Bearer token mismatch');
-    console.error('Received:', authHeader);
-    console.error('Expected:', expectedValue);
-    return false;
-  }
-
-  return true;
+  const bodyWindow = typeof payload.window === 'string' ? payload.window : null;
+  return parseWindow(bodyWindow ?? url.searchParams.get('window'));
 }
 
 async function handleSchedulerRequest(req: Request) {
   try {
     const url = new URL(req.url);
-    const headersObj = Object.fromEntries(req.headers.entries());
-    console.log("All incoming headers:", JSON.stringify(headersObj, null, 2));
-    if (!isAuthorized(req, url)) {
-      return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-    }
 
-    const window = parseWindow(url.searchParams.get('window'));
+    const window = await resolveWindow(req, url);
     if (!window) {
       return NextResponse.json(
         { error: 'invalid window, expected earlybirds or latecomers' },
@@ -72,10 +53,9 @@ async function handleSchedulerRequest(req: Request) {
   }
 }
 
+export const POST = verifySignatureEdge(handleSchedulerRequest)
+
 export async function GET(req: Request) {
   return handleSchedulerRequest(req);
 }
 
-export async function POST(req: Request) {
-  return handleSchedulerRequest(req);
-}

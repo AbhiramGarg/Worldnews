@@ -1,12 +1,12 @@
 {
   "crons": [
     {
-      "path": "/api/fetch?window=earlybirds",
-      "schedule": "35 16 * * *"
+      "path": "/api/trigger-sync?window=earlybirds",
+      "schedule": "30 13 * * *"
     },
     {
-      "path": "/api/fetch?window=latecomers",
-      "schedule": "30 13 * * *"
+      "path": "/api/trigger-sync?window=latecomers",
+      "schedule": "20 17 * * *"
     }
   ]
 }
