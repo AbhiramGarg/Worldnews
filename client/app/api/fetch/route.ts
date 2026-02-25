@@ -1,5 +1,5 @@
-import { verifySignatureEdge } from '@upstash/qstash/nextjs';
-import { NextResponse } from 'next/server';
+import { Receiver } from '@upstash/qstash';
+import { NextRequest, NextResponse } from 'next/server';
 import { runNewsSync, type SyncWindow } from '@/app/lib/newsSync';
 
 export const runtime = 'nodejs';
@@ -53,7 +53,42 @@ async function handleSchedulerRequest(req: Request) {
   }
 }
 
-export const POST = verifySignatureEdge(handleSchedulerRequest)
+async function verifyQStashRequest(req: NextRequest): Promise<boolean> {
+  const signature = req.headers.get('upstash-signature');
+  if (!signature) {
+    return false;
+  }
+
+  const currentSigningKey = process.env.wn__QSTASH_CURRENT_SIGNING_KEY ?? process.env.QSTASH_CURRENT_SIGNING_KEY;
+  const nextSigningKey = process.env.wn__QSTASH_NEXT_SIGNING_KEY ?? process.env.QSTASH_NEXT_SIGNING_KEY;
+
+  const receiver = new Receiver({
+    currentSigningKey,
+    nextSigningKey,
+  });
+
+  try {
+    const body = await req.clone().text();
+    return await receiver.verify({
+      signature,
+      body,
+      url: req.url,
+      upstashRegion: req.headers.get('upstash-region') ?? undefined,
+    });
+  } catch (error) {
+    console.error('QStash signature verification failed', error);
+    return false;
+  }
+}
+
+export async function POST(req: NextRequest) {
+  const isValid = await verifyQStashRequest(req);
+  if (!isValid) {
+    return NextResponse.json({ error: 'invalid qstash signature' }, { status: 401 });
+  }
+
+  return handleSchedulerRequest(req);
+}
 
 export async function GET(req: Request) {
   return handleSchedulerRequest(req);
