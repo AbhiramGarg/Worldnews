@@ -1,5 +1,6 @@
 import { Client } from '@upstash/qstash'
 import { NextRequest, NextResponse } from 'next/server'
+import { getCountriesForWindow } from '@/app/lib/newsSync'
 
 const client = new Client({
   baseUrl: process.env.wn__QSTASH_URL!,
@@ -7,6 +8,7 @@ const client = new Client({
 })
 
 type SyncWindow = 'earlybirds' | 'latecomers'
+const BATCH_DELAY_SECONDS = 12
 
 function parseWindow(value: string | null): SyncWindow | null {
   if (value === null || value === 'earlybirds') return 'earlybirds'
@@ -47,15 +49,62 @@ function resolvePublicBaseUrl(request: NextRequest): string {
   )
 }
 
+function resolveMessageReference(result: unknown): string {
+  if (result && typeof result === 'object') {
+    const maybeResult = result as { messageId?: unknown; messageIds?: unknown }
+    if (typeof maybeResult.messageId === 'string') {
+      return maybeResult.messageId
+    }
+    if (Array.isArray(maybeResult.messageIds)) {
+      const first = maybeResult.messageIds[0]
+      if (typeof first === 'string') {
+        return first
+      }
+    }
+  }
+
+  return 'unknown'
+}
+
 async function publishSync(window: SyncWindow, request: NextRequest) {
   const baseUrl = resolvePublicBaseUrl(request)
   const route = `api/fetch?window=${window}`
+  const countries = getCountriesForWindow(window)
 
-  const { messageId } = await client.publishJSON({
-    url: `${baseUrl}/${route}`,
-  })
+  const publishResults = await Promise.all(
+    countries.map((country, index) => {
+      const delaySeconds = index * BATCH_DELAY_SECONDS
+      const delay = delaySeconds > 0 ? (`${BigInt(delaySeconds)}s` as const) : undefined
 
-  return NextResponse.json({ messageId, window }, { status: 200 })
+      return client.publishJSON({
+        url: `${baseUrl}/${route}`,
+        body: {
+          window,
+          countries: [country],
+          replaceCountries: true,
+          resetBeforeInsert: false,
+          batchIndex: index + 1,
+          totalBatches: countries.length,
+        },
+        delay,
+        retries: 0,
+      })
+    })
+  )
+
+  return NextResponse.json(
+    {
+      window,
+      totalCountries: countries.length,
+      totalBatches: countries.length,
+      messages: publishResults.map((result, index) => ({
+        messageId: resolveMessageReference(result),
+        batchIndex: index + 1,
+        countries: [countries[index]],
+      })),
+    },
+    { status: 200 }
+  )
 }
 
 export const GET = async (request: NextRequest) => {

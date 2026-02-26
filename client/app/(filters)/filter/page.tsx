@@ -306,12 +306,17 @@ const Home = () => {
   // --- Fetch titles from backend when filters change ---
   const [articles, setArticles] = React.useState<Article[]>([]);
   const [expandedArticleId, setExpandedArticleId] = React.useState<string | null>(null);
+  const [isLoading, setIsLoading] = React.useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = React.useState(false);
   
   useEffect(() => {
     // Only fetch after URL params have been read
     if (!urlInitialized) return;
 
+    const controller = new AbortController();
+
     const fetchArticles = async () => {
+      setIsLoading(true);
       try {
         const params = new URLSearchParams();
         if (selectedCountry && selectedCountry.code && selectedCountry.code !== 'All') {
@@ -321,21 +326,35 @@ const Home = () => {
           params.append('category', selectedCategory.toLowerCase());
         }
         const q = params.toString();
-        const res = await fetch(`/api/articles${q ? `?${q}` : ''}`);
+        const res = await fetch(`/api/articles${q ? `?${q}` : ''}`, { signal: controller.signal });
         if (!res.ok) {
-          setArticles([]);
+          if (!controller.signal.aborted) {
+            setArticles([]);
+          }
           return;
         }
         const data = await res.json();
-        setArticles(Array.isArray(data.articles) ? data.articles : []);
-        // Reset expanded article when filters change
-        setExpandedArticleId(null);
+        if (!controller.signal.aborted) {
+          setArticles(Array.isArray(data.articles) ? data.articles : []);
+          setExpandedArticleId(null);
+        }
       } catch (e) {
-        setArticles([]);
+        if (!controller.signal.aborted) {
+          setArticles([]);
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsLoading(false);
+          setHasLoadedOnce(true);
+        }
       }
     };
 
     fetchArticles();
+
+    return () => {
+      controller.abort();
+    };
   }, [selectedCountry, selectedCategory, urlInitialized]);
 
 
@@ -442,7 +461,10 @@ const Home = () => {
 
         {/* --- Articles Section --- */}
         <div style={styles.articlesSection as React.CSSProperties} data-article-section>
-          <h3 style={styles.articleHeading}>Articles ({articles.length})</h3>
+          <div style={styles.articleHeaderRow}>
+            <h3 style={styles.articleHeading}>Articles ({articles.length})</h3>
+            {isLoading ? <span style={styles.loadingBadge}>Updating...</span> : null}
+          </div>
           {articles.length > 0 ? (
             <div style={styles.articlesGrid}>
               {articles.map((article) => (
@@ -457,6 +479,19 @@ const Home = () => {
                     );
                   }}
                 />
+              ))}
+            </div>
+          ) : isLoading && !hasLoadedOnce ? (
+            <div style={styles.skeletonGrid}>
+              {[0, 1, 2, 3].map((item) => (
+                <div key={item} style={styles.skeletonCard}>
+                  <div style={styles.skeletonImage} />
+                  <div style={styles.skeletonBody}>
+                    <div style={styles.skeletonLineWide} />
+                    <div style={styles.skeletonLine} />
+                    <div style={styles.skeletonLineShort} />
+                  </div>
+                </div>
               ))}
             </div>
           ) : (
@@ -647,12 +682,85 @@ const styles = {
     letterSpacing: '-0.015em',
   },
 
+  articleHeaderRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '10px',
+  } as React.CSSProperties,
+
+  loadingBadge: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '6px 10px',
+    borderRadius: '9999px',
+    fontSize: '0.8rem',
+    fontWeight: 700,
+    color: 'var(--accent-text)',
+    background: 'var(--accent-soft)',
+    border: '1px solid var(--accent-strong)',
+  } as React.CSSProperties,
+
   articlesGrid: {
     display: 'flex',
     flexDirection: 'column',
     gap: '18px',
     marginTop: '20px',
     width: '100%',
+  } as React.CSSProperties,
+
+  skeletonGrid: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '14px',
+    marginTop: '20px',
+  } as React.CSSProperties,
+
+  skeletonCard: {
+    display: 'flex',
+    gap: '16px',
+    borderRadius: '12px',
+    border: '1px solid var(--border-color)',
+    background: 'var(--surface)',
+    padding: '14px',
+    boxShadow: '0 6px 16px var(--shadow-color)',
+  } as React.CSSProperties,
+
+  skeletonImage: {
+    width: '128px',
+    minWidth: '128px',
+    height: '90px',
+    borderRadius: '10px',
+    background: 'var(--surface-muted)',
+  } as React.CSSProperties,
+
+  skeletonBody: {
+    flex: 1,
+    display: 'grid',
+    gap: '10px',
+    alignContent: 'center',
+  } as React.CSSProperties,
+
+  skeletonLineWide: {
+    height: '14px',
+    width: '92%',
+    borderRadius: '9999px',
+    background: 'var(--surface-muted)',
+  } as React.CSSProperties,
+
+  skeletonLine: {
+    height: '12px',
+    width: '78%',
+    borderRadius: '9999px',
+    background: 'var(--surface-muted)',
+  } as React.CSSProperties,
+
+  skeletonLineShort: {
+    height: '10px',
+    width: '56%',
+    borderRadius: '9999px',
+    background: 'var(--surface-muted)',
   } as React.CSSProperties,
 
   noArticles: {

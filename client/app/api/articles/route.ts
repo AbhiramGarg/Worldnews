@@ -1,6 +1,14 @@
 import { NextResponse } from 'next/server';
 import { getPrisma } from '../../lib/prisma';
 
+type CachedArticles = {
+  expiresAt: number;
+  articles: any[];
+};
+
+const ARTICLES_CACHE_TTL_MS = 30_000;
+const articlesCache = new Map<string, CachedArticles>();
+
 export async function GET(req: Request) {
   let prisma = null;
   try {
@@ -17,6 +25,16 @@ export async function GET(req: Request) {
 
     if (categoryParam && categoryParam.toLowerCase() !== 'all') {
       where.category = categoryParam.toLowerCase();
+    }
+
+    const cacheKey = `${countryParam ?? 'all'}|${categoryParam ?? 'all'}`;
+    const now = Date.now();
+    const cached = articlesCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      return NextResponse.json(
+        { articles: cached.articles },
+        { headers: { 'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=120' } }
+      );
     }
 
     prisma = await getPrisma();
@@ -41,7 +59,15 @@ export async function GET(req: Request) {
       apiId: article.apiId.toString(),
     }));
 
-    return NextResponse.json({ articles });
+    articlesCache.set(cacheKey, {
+      expiresAt: now + ARTICLES_CACHE_TTL_MS,
+      articles,
+    });
+
+    return NextResponse.json(
+      { articles },
+      { headers: { 'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=120' } }
+    );
   } catch (err) {
     console.error('articles route error', err);
     return NextResponse.json({ articles: [], error: 'server error' }, { status: 500 });

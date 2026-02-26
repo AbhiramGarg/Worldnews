@@ -195,3 +195,47 @@ export async function insertNewsArticles(
         throw error;
     }
 }
+
+export async function replaceNewsArticlesForCountries(
+    prisma: PrismaClient,
+    countries: string[],
+    articles: any[],
+    batchSize = 500
+): Promise<number> {
+    try {
+        const normalizedCountries = countries.map((country) => String(country).trim()).filter(Boolean);
+        if (normalizedCountries.length === 0) {
+            return 0;
+        }
+
+        await prisma.newsArticle.deleteMany({
+            where: {
+                sourceCountry: {
+                    in: normalizedCountries,
+                },
+            },
+        });
+
+        if (!articles || articles.length === 0) {
+            return 0;
+        }
+
+        const nextApiId = await getNextApiId(prisma);
+        const transformed = transformArticles(articles, nextApiId);
+
+        let inserted = 0;
+        for (let i = 0; i < transformed.length; i += batchSize) {
+            const chunk = transformed.slice(i, i + batchSize);
+            const res = await prisma.newsArticle.createMany({
+                data: chunk,
+                skipDuplicates: true,
+            });
+            inserted += res.count ?? 0;
+        }
+
+        return inserted;
+    } catch (error) {
+        console.error('Error in replaceNewsArticlesForCountries:', error);
+        throw error;
+    }
+}

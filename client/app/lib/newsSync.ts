@@ -3,6 +3,7 @@ import {
   connectToDatabase,
   deleteAndInsertNewsArticles,
   insertNewsArticles,
+  replaceNewsArticlesForCountries,
 } from '@/db/postgres_db';
 
 const baseurl = 'https://api.worldnewsapi.com/search-news';
@@ -26,6 +27,10 @@ export type SyncWindow = 'earlybirds' | 'latecomers';
 
 function getCountries(window: SyncWindow): string[] {
   return window === 'earlybirds' ? earlybirds : latecomers;
+}
+
+export function getCountriesForWindow(window: SyncWindow): string[] {
+  return [...getCountries(window)];
 }
 
 async function fetchNewsForCountries(countries: string[], apiKey: string) {
@@ -84,7 +89,13 @@ async function fetchNewsForCountries(countries: string[], apiKey: string) {
   return allNews;
 }
 
-export async function runNewsSync(window: SyncWindow) {
+type RunNewsSyncOptions = {
+  countries?: string[];
+  resetBeforeInsert?: boolean;
+  replaceCountries?: boolean;
+};
+
+export async function runNewsSync(window: SyncWindow, options: RunNewsSyncOptions = {}) {
   console.log(`[sync:${window}] Starting news sync`);
 
   const apiKey = process.env.WORLD_NEWS_API_KEY;
@@ -92,16 +103,27 @@ export async function runNewsSync(window: SyncWindow) {
     throw new Error('WORLD_NEWS_API_KEY is not set');
   }
 
-  const countries = getCountries(window);
+  const countries = options.countries && options.countries.length > 0
+    ? options.countries
+    : getCountries(window);
   const allNews = await fetchNewsForCountries(countries, apiKey);
 
   let savedCount = 0;
-  let dbMode: 'delete-and-insert' | 'insert-only' = 'insert-only';
+  const shouldReplaceCountries = options.replaceCountries === true;
+  const shouldReset = options.resetBeforeInsert ?? window === 'earlybirds';
+  let dbMode: 'delete-and-insert' | 'insert-only' | 'replace-countries' = shouldReplaceCountries
+    ? 'replace-countries'
+    : shouldReset
+      ? 'delete-and-insert'
+      : 'insert-only';
 
   try {
     const prisma = await connectToDatabase();
     try {
-      if (window === 'earlybirds') {
+      if (shouldReplaceCountries) {
+        dbMode = 'replace-countries';
+        savedCount = await replaceNewsArticlesForCountries(prisma, countries, allNews);
+      } else if (shouldReset) {
         dbMode = 'delete-and-insert';
         savedCount = await deleteAndInsertNewsArticles(prisma, allNews);
       } else {
