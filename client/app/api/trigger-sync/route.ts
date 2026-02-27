@@ -8,7 +8,16 @@ const client = new Client({
 })
 
 type SyncWindow = 'earlybirds' | 'latecomers'
-const BATCH_DELAY_SECONDS = 12
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  if (!value) return fallback
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  if (parsed <= 0) return fallback
+  return Math.floor(parsed)
+}
+
+const BATCH_DELAY_SECONDS = parsePositiveInt(process.env.SYNC_BATCH_DELAY_SECONDS, 30)
 
 function parseWindow(value: string | null): SyncWindow | null {
   if (value === null || value === 'earlybirds') return 'earlybirds'

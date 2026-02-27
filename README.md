@@ -27,11 +27,19 @@ For local Next.js runtime (`client/.env`), define:
 DATABASE_URL=postgresql://<user>:<password>@<host>:5432/<database>
 WORLD_NEWS_API_KEY=<world_news_api_key>
 CRON_SECRET=<strong_random_secret>
+SYNC_BATCH_DELAY_SECONDS=30
+SYNC_COUNTRY_DELAY_MS=1000
+SYNC_MAX_429_RETRIES=3
+SYNC_429_BACKOFF_BASE_MS=3000
+SYNC_429_BACKOFF_MAX_MS=45000
 ```
 
 Notes:
 - In Docker Desktop on Windows/macOS, use `host.docker.internal` as `<host>` when DB runs on your machine.
 - `CRON_SECRET` protects `/api/fetch` when scheduler auth is enabled.
+- `SYNC_BATCH_DELAY_SECONDS` controls spacing between queued country jobs in `/api/trigger-sync`.
+- `SYNC_COUNTRY_DELAY_MS` applies when a single sync run processes multiple countries sequentially.
+- `SYNC_MAX_429_RETRIES` and backoff settings control how aggressively `429` responses are retried.
 
 ## Run with Docker (Client-Only, Stateless)
 
@@ -77,6 +85,28 @@ npx prisma migrate deploy
   - `window=earlybirds`
   - `window=latecomers`
 - Default behavior: if `window` is omitted, it runs `earlybirds`.
+
+### Manual Missing-Country Recovery Endpoint
+
+- Route: `/api/retry-missing-countries`
+- Methods: `GET` and `POST`
+- Query/body:
+  - `window=earlybirds|latecomers`
+  - optional `countries` (comma-separated in query or array in JSON body)
+  - optional `onlyReport=true` (GET only) to list missing countries without fetching
+
+Examples:
+
+```bash
+# Report-only (no fetch)
+curl "http://localhost:3000/api/retry-missing-countries?window=earlybirds&onlyReport=true"
+
+# Retry only countries currently missing in DB
+curl "http://localhost:3000/api/retry-missing-countries?window=earlybirds"
+
+# Retry only a specific subset manually
+curl "http://localhost:3000/api/retry-missing-countries?window=earlybirds&countries=gb,fr,de"
+```
 
 ### Auth for `/api/fetch`
 
