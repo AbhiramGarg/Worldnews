@@ -106,6 +106,57 @@ body {
   color: var(--dropdown-hover-text);
 }
 
+@keyframes about-float {
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes about-pulse {
+  0%,
+  100% {
+    opacity: 0.26;
+  }
+  50% {
+    opacity: 0.46;
+  }
+}
+
+@keyframes about-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.aboutFxFloat {
+  animation: about-float 8s ease-in-out infinite;
+}
+
+.aboutFxPulse {
+  animation: about-pulse 6s ease-in-out infinite;
+}
+
+.aboutFxSpin {
+  animation: about-spin 26s linear infinite;
+}
+
+.aboutFxLift {
+  transition: transform 0.28s ease, box-shadow 0.28s ease, border-color 0.28s ease;
+}
+
+.aboutFxLift:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 16px 26px var(--shadow-color);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border-color));
+}
+
 /* Responsive Query Styles */
 @media (max-width: 1024px) {
   [data-layout-grid] {
