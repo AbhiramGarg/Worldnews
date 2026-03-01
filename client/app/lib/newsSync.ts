@@ -1,4 +1,5 @@
 import { ApiArticleSchema } from '@/lib/Validation';
+import { Prisma, type PrismaClient } from '@prisma/client';
 import {
   connectToDatabase,
   deleteAndInsertNewsArticles,
@@ -30,6 +31,7 @@ export type MissingCountriesReport = {
   targetCountries: string[];
   existingCountries: string[];
   missingCountries: string[];
+  countryOutcomes?: Record<string, string>;
 };
 
 export type RetryMissingCountriesResult = {
@@ -48,8 +50,53 @@ export type RetryMissingCountriesResult = {
   missingCountriesAfter: string[];
 };
 
+type CountryOutcomeType =
+  | 'success'
+  | 'empty_response'
+  | 'empty_after_validation'
+  | 'http_error'
+  | 'request_error'
+  | 'rate_limited_exhausted'
+  | 'db_save_failed';
+
+type CountrySyncOutcome = {
+  country: string;
+  fetchedCount: number;
+  sanitizedCount: number;
+  attemptCount: number;
+  outcome: CountryOutcomeType;
+  httpStatus?: number;
+  error?: string;
+  articles: any[];
+};
+
+type CountrySyncStatusRow = {
+  country: string;
+  lastOutcome: string;
+};
+
+type PersistedCountrySyncOutcome = {
+  country: string;
+  fetchedCount: number;
+  sanitizedCount: number;
+  attemptCount: number;
+  outcome: CountryOutcomeType;
+  httpStatus: number | null;
+  error: string | null;
+};
+
 function getCountries(window: SyncWindow): string[] {
   return window === 'earlybirds' ? earlybirds : latecomers;
+}
+
+function normalizeCountryCode(country: string): string {
+  return String(country).toLowerCase().trim();
+}
+
+function normalizeCountries(countries: string[]): string[] {
+  return countries
+    .map((country) => normalizeCountryCode(country))
+    .filter(Boolean);
 }
 
 export function getCountriesForWindow(window: SyncWindow): string[] {
@@ -66,7 +113,7 @@ async function getExistingCountriesFromDatabase(countries: string[]): Promise<st
     const rows = await prisma.newsArticle.findMany({
       where: {
         sourceCountry: {
-          in: countries,
+          in: normalizeCountries(countries),
         },
       },
       select: {
@@ -76,33 +123,103 @@ async function getExistingCountriesFromDatabase(countries: string[]): Promise<st
     });
 
     return rows
-      .map((row) => String(row.sourceCountry).toLowerCase().trim())
+      .map((row) => normalizeCountryCode(row.sourceCountry))
       .filter(Boolean);
   } finally {
     await prisma.$disconnect();
   }
 }
 
+function isCountrySyncStatusTableMissing(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return message.includes('country_sync_status') && message.includes('does not exist');
+}
+
+async function getCountrySyncOutcomes(
+  window: SyncWindow,
+  countries: string[]
+): Promise<Map<string, string> | null> {
+  const normalizedCountries = normalizeCountries(countries);
+  if (normalizedCountries.length === 0) {
+    return new Map();
+  }
+
+  const prisma = await connectToDatabase();
+  try {
+    const rows = await prisma.$queryRaw<CountrySyncStatusRow[]>`
+      SELECT country, last_outcome AS "lastOutcome"
+      FROM country_sync_status
+      WHERE "window" = ${window}
+        AND country IN (${Prisma.join(normalizedCountries)})
+    `;
+
+    const outcomeMap = new Map<string, string>();
+    rows.forEach((row) => {
+      outcomeMap.set(normalizeCountryCode(row.country), row.lastOutcome);
+    });
+
+    return outcomeMap;
+  } catch (error) {
+    if (isCountrySyncStatusTableMissing(error)) {
+      return null;
+    }
+
+    throw error;
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+function getCountriesNeedingRetryFromOutcomes(
+  targetCountries: string[],
+  outcomeMap: Map<string, string>
+): string[] {
+  return targetCountries.filter((country) => {
+    const outcome = outcomeMap.get(country);
+    return outcome !== 'success';
+  });
+}
+
 export async function getMissingCountriesReport(
   window: SyncWindow,
   countriesOverride?: string[],
 ): Promise<MissingCountriesReport> {
-  const targetCountries = (countriesOverride && countriesOverride.length > 0
+  const targetCountries = normalizeCountries(countriesOverride && countriesOverride.length > 0
     ? countriesOverride
     : getCountries(window)
-  )
-    .map((country) => String(country).toLowerCase().trim())
-    .filter(Boolean);
+  );
 
   const existingCountries = await getExistingCountriesFromDatabase(targetCountries);
-  const existingSet = new Set(existingCountries);
-  const missingCountries = targetCountries.filter((country) => !existingSet.has(country));
+  const outcomeMap = await getCountrySyncOutcomes(window, targetCountries);
+
+  if (outcomeMap === null) {
+    const existingSet = new Set(existingCountries);
+    const missingCountries = targetCountries.filter((country) => !existingSet.has(country));
+
+    return {
+      window,
+      targetCountries,
+      existingCountries,
+      missingCountries,
+    };
+  }
+
+  const missingCountries = getCountriesNeedingRetryFromOutcomes(targetCountries, outcomeMap);
+  const countryOutcomes: Record<string, string> = {};
+  targetCountries.forEach((country) => {
+    countryOutcomes[country] = outcomeMap.get(country) ?? 'never_attempted';
+  });
 
   return {
     window,
     targetCountries,
     existingCountries,
     missingCountries,
+    countryOutcomes,
   };
 }
 
@@ -182,16 +299,45 @@ const MAX_429_RETRIES = parsePositiveInt(process.env.SYNC_MAX_429_RETRIES, 3);
 const RETRY_BACKOFF_BASE_MS = parsePositiveInt(process.env.SYNC_429_BACKOFF_BASE_MS, 3000);
 const RETRY_BACKOFF_MAX_MS = parsePositiveInt(process.env.SYNC_429_BACKOFF_MAX_MS, 45000);
 
+function createDefaultOutcome(country: string): CountrySyncOutcome {
+  return {
+    country,
+    fetchedCount: 0,
+    sanitizedCount: 0,
+    attemptCount: 0,
+    outcome: 'request_error',
+    error: 'unknown error',
+    articles: [],
+  };
+}
+
+function compactError(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  return value.length > 500 ? value.slice(0, 500) : value;
+}
+
+type FetchNewsForCountriesResult = {
+  allNews: any[];
+  outcomes: CountrySyncOutcome[];
+};
+
 async function fetchNewsForCountries(countries: string[], apiKey: string) {
   const allNews: any[] = [];
+  const outcomes: CountrySyncOutcome[] = [];
   const categoriesParam = categories.join(',');
 
   for (const country of countries) {
-    const url = `${baseurl}?language=[en]&number=5&source-countries=${country}&categories=${categoriesParam}`;
+    const normalizedCountry = normalizeCountryCode(country);
+    const url = `${baseurl}?language=[en]&number=5&source-countries=${normalizedCountry}&categories=${categoriesParam}`;
     let attempt = 0;
+    const outcome = createDefaultOutcome(normalizedCountry);
 
     while (attempt <= MAX_429_RETRIES) {
       try {
+        outcome.attemptCount = attempt + 1;
         console.log(`[sync:${country}] Fetching (attempt ${attempt + 1}/${MAX_429_RETRIES + 1})...`);
         const response = await fetch(url, {
           headers: {
@@ -220,12 +366,26 @@ async function fetchNewsForCountries(countries: string[], apiKey: string) {
             continue;
           }
 
+          if (response.status === 429) {
+            outcome.outcome = 'rate_limited_exhausted';
+          } else {
+            outcome.outcome = 'http_error';
+          }
+
+          outcome.httpStatus = response.status;
+          outcome.error = compactError(responseBody) ?? `http ${response.status}`;
+
           console.error(`[sync:${country}] Failed: ${response.status}${responseBody ? ` - ${responseBody}` : ''}`);
           break;
         }
 
         const data = await response.json();
+        const fetchedNews = Array.isArray(data.news) ? data.news : [];
+        outcome.fetchedCount = fetchedNews.length;
+
         if (!data.news || data.news.length === 0) {
+          outcome.outcome = 'empty_response';
+          outcome.error = undefined;
           break;
         }
 
@@ -244,31 +404,134 @@ async function fetchNewsForCountries(countries: string[], apiKey: string) {
           return [parsed.data];
         });
 
+        outcome.sanitizedCount = sanitizedArticles.length;
+
         if (sanitizedArticles.length === 0) {
+          outcome.outcome = 'empty_after_validation';
+          outcome.error = 'all fetched articles failed validation';
           console.log(`[sync:${country}] Validation: 0/${fetchedCount}`);
           break;
         }
 
+        outcome.outcome = 'success';
+        outcome.error = undefined;
+        outcome.articles = sanitizedArticles;
         allNews.push(...sanitizedArticles);
         console.log(`[sync:${country}] Validation: ${sanitizedArticles.length}/${fetchedCount}`);
         break;
       } catch (error) {
+        outcome.outcome = 'request_error';
+        outcome.error = error instanceof Error ? compactError(error.message) : 'unknown request error';
         console.error(`[sync:${country}] Error fetching:`, error);
         break;
       }
     }
 
+    outcomes.push(outcome);
+
     await sleep(COUNTRY_REQUEST_DELAY_MS);
   }
 
-  return allNews;
+  return {
+    allNews,
+    outcomes,
+  } satisfies FetchNewsForCountriesResult;
 }
 
 type RunNewsSyncOptions = {
   countries?: string[];
   resetBeforeInsert?: boolean;
   replaceCountries?: boolean;
+  runId?: string;
 };
+
+function withDbSaveOutcome(
+  outcome: CountrySyncOutcome,
+  dbSaveError: string | null
+): PersistedCountrySyncOutcome {
+  if (!dbSaveError || outcome.sanitizedCount === 0 || outcome.outcome !== 'success') {
+    return {
+      country: outcome.country,
+      fetchedCount: outcome.fetchedCount,
+      sanitizedCount: outcome.sanitizedCount,
+      attemptCount: outcome.attemptCount,
+      outcome: outcome.outcome,
+      httpStatus: outcome.httpStatus ?? null,
+      error: compactError(outcome.error) ?? null,
+    };
+  }
+
+  return {
+    country: outcome.country,
+    fetchedCount: outcome.fetchedCount,
+    sanitizedCount: outcome.sanitizedCount,
+    attemptCount: outcome.attemptCount,
+    outcome: 'db_save_failed',
+    httpStatus: null,
+    error: compactError(dbSaveError) ?? null,
+  };
+}
+
+async function persistCountrySyncStatuses(
+  prisma: PrismaClient,
+  window: SyncWindow,
+  runId: string,
+  outcomes: PersistedCountrySyncOutcome[]
+): Promise<void> {
+  const now = new Date();
+
+  for (const outcome of outcomes) {
+    const successAt = outcome.outcome === 'success' ? now : null;
+
+    await prisma.$executeRaw`
+      INSERT INTO country_sync_status (
+        "window",
+        country,
+        last_run_id,
+        last_attempt_at,
+        last_success_at,
+        last_outcome,
+        last_http_status,
+        fetched_count,
+        sanitized_count,
+        attempt_count,
+        last_error,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ${window},
+        ${outcome.country},
+        ${runId},
+        ${now},
+        ${successAt},
+        ${outcome.outcome},
+        ${outcome.httpStatus},
+        ${outcome.fetchedCount},
+        ${outcome.sanitizedCount},
+        ${outcome.attemptCount},
+        ${outcome.error},
+        ${now},
+        ${now}
+      )
+      ON CONFLICT ("window", country)
+      DO UPDATE SET
+        last_run_id = EXCLUDED.last_run_id,
+        last_attempt_at = EXCLUDED.last_attempt_at,
+        last_success_at = CASE
+          WHEN EXCLUDED.last_success_at IS NOT NULL THEN EXCLUDED.last_success_at
+          ELSE country_sync_status.last_success_at
+        END,
+        last_outcome = EXCLUDED.last_outcome,
+        last_http_status = EXCLUDED.last_http_status,
+        fetched_count = EXCLUDED.fetched_count,
+        sanitized_count = EXCLUDED.sanitized_count,
+        attempt_count = EXCLUDED.attempt_count,
+        last_error = EXCLUDED.last_error,
+        updated_at = EXCLUDED.updated_at
+    `;
+  }
+}
 
 export async function runNewsSync(window: SyncWindow, options: RunNewsSyncOptions = {}) {
   console.log(`[sync:${window}] Starting news sync`);
@@ -279,11 +542,13 @@ export async function runNewsSync(window: SyncWindow, options: RunNewsSyncOption
   }
 
   const countries = options.countries && options.countries.length > 0
-    ? options.countries
-    : getCountries(window);
-  const allNews = await fetchNewsForCountries(countries, apiKey);
+    ? normalizeCountries(options.countries)
+    : normalizeCountries(getCountries(window));
+  const runId = options.runId ?? `${window}:${new Date().toISOString()}`;
+  const { allNews, outcomes } = await fetchNewsForCountries(countries, apiKey);
 
   let savedCount = 0;
+  let dbSaveErrorMessage: string | null = null;
   const shouldReplaceCountries = options.replaceCountries === true;
   const shouldReset = options.resetBeforeInsert ?? window === 'earlybirds';
   let dbMode: 'delete-and-insert' | 'insert-only' | 'replace-countries' = shouldReplaceCountries
@@ -309,7 +574,24 @@ export async function runNewsSync(window: SyncWindow, options: RunNewsSyncOption
       await prisma.$disconnect();
     }
   } catch (dbErr) {
+    dbSaveErrorMessage = dbErr instanceof Error ? dbErr.message : 'unknown database save error';
     console.error(`[sync:${window}] Database save failed (continuing):`, dbErr);
+  }
+
+  try {
+    const prisma = await connectToDatabase();
+    try {
+      const persistedOutcomes = outcomes.map((outcome) => withDbSaveOutcome(outcome, dbSaveErrorMessage));
+      await persistCountrySyncStatuses(prisma, window, runId, persistedOutcomes);
+    } finally {
+      await prisma.$disconnect();
+    }
+  } catch (statusErr) {
+    if (isCountrySyncStatusTableMissing(statusErr)) {
+      console.warn('[sync] country_sync_status table not found. Apply latest Prisma migration to enable status-based retries.');
+    } else {
+      console.error('[sync] Failed to persist country sync status:', statusErr);
+    }
   }
 
   return {
