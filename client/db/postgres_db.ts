@@ -203,25 +203,50 @@ export async function replaceNewsArticlesForCountries(
     batchSize = 500
 ): Promise<number> {
     try {
-        const normalizedCountries = countries.map((country) => String(country).trim()).filter(Boolean);
+        const normalizedCountries = countries
+            .map((country) => String(country).toLowerCase().trim())
+            .filter(Boolean);
         if (normalizedCountries.length === 0) {
+            return 0;
+        }
+
+        if (!articles || articles.length === 0) {
+            return 0;
+        }
+
+        const allowedCountries = new Set(normalizedCountries);
+        const filteredArticles = articles.filter((article) => {
+            const rawCountry = article?.sourceCountry ?? article?.source_country ?? '';
+            const normalizedCountry = String(rawCountry).toLowerCase().trim();
+            return normalizedCountry.length > 0 && allowedCountries.has(normalizedCountry);
+        });
+
+        if (filteredArticles.length === 0) {
+            return 0;
+        }
+
+        const nextApiId = await getNextApiId(prisma);
+        const transformed = transformArticles(filteredArticles, nextApiId);
+
+        const countriesWithFreshData = Array.from(
+            new Set(
+                transformed
+                    .map((article) => String(article.sourceCountry).toLowerCase().trim())
+                    .filter((country) => country.length > 0 && allowedCountries.has(country))
+            )
+        );
+
+        if (countriesWithFreshData.length === 0) {
             return 0;
         }
 
         await prisma.newsArticle.deleteMany({
             where: {
                 sourceCountry: {
-                    in: normalizedCountries,
+                    in: countriesWithFreshData,
                 },
             },
         });
-
-        if (!articles || articles.length === 0) {
-            return 0;
-        }
-
-        const nextApiId = await getNextApiId(prisma);
-        const transformed = transformArticles(articles, nextApiId);
 
         let inserted = 0;
         for (let i = 0; i < transformed.length; i += batchSize) {

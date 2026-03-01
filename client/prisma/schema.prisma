@@ -29,3 +29,23 @@ model NewsArticle {
 
   @@map("news_article")
 }
+
+model CountrySyncStatus {
+  id            BigInt   @id @default(autoincrement())
+  window        String   @db.VarChar(20)
+  country       String   @db.VarChar(3)
+  lastRunId     String?  @map("last_run_id") @db.VarChar(80)
+  lastAttemptAt DateTime @map("last_attempt_at")
+  lastSuccessAt DateTime? @map("last_success_at")
+  lastOutcome   String   @map("last_outcome") @db.VarChar(40)
+  lastHttpStatus Int?    @map("last_http_status")
+  fetchedCount  Int      @default(0) @map("fetched_count")
+  sanitizedCount Int     @default(0) @map("sanitized_count")
+  attemptCount  Int      @default(0) @map("attempt_count")
+  lastError     String?  @map("last_error")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@unique([window, country], map: "country_sync_status_window_country_key")
+  @@map("country_sync_status")
+}
