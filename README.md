@@ -9,8 +9,8 @@ WorldNews is a Next.js 16 application that fetches news from a third-party API, 
 - ORM: Prisma (`@prisma/client` + `@prisma/adapter-pg`)
 - Container runtime: client-only via `docker-compose.yml`
 - Scheduler options:
-  - Internal in-app scheduler (`INTERNAL_SCHEDULER_ENABLED=true` in current compose)
-  - External scheduler via Vercel cron (`client/vercel.json`)
+  - Internal in-app scheduler (`INTERNAL_SCHEDULER_ENABLED=true`)
+  - External scheduler (any platform cron/job runner) calling API routes
 
 ## Environment Variables
 
@@ -27,7 +27,7 @@ For local Next.js runtime (`client/.env`), define:
 DATABASE_URL=postgresql://<user>:<password>@<host>:5432/<database>
 WORLD_NEWS_API_KEY=<world_news_api_key>
 CRON_SECRET=<strong_random_secret>
-SYNC_BATCH_DELAY_SECONDS=30
+INTERNAL_SCHEDULER_ENABLED=false
 SYNC_COUNTRY_DELAY_MS=1000
 SYNC_MAX_429_RETRIES=3
 SYNC_429_BACKOFF_BASE_MS=3000
@@ -36,8 +36,7 @@ SYNC_429_BACKOFF_MAX_MS=45000
 
 Notes:
 - In Docker Desktop on Windows/macOS, use `host.docker.internal` as `<host>` when DB runs on your machine.
-- `CRON_SECRET` protects `/api/fetch` when scheduler auth is enabled.
-- `SYNC_BATCH_DELAY_SECONDS` controls spacing between queued country jobs in `/api/trigger-sync`.
+- `CRON_SECRET` protects scheduler-facing endpoints (`/api/fetch`, `/api/trigger-sync`) when set.
 - `SYNC_COUNTRY_DELAY_MS` applies when a single sync run processes multiple countries sequentially.
 - `SYNC_MAX_429_RETRIES` and backoff settings control how aggressively `429` responses are retried.
 
@@ -81,10 +80,25 @@ npx prisma migrate deploy
 
 - Route: `/api/fetch`
 - Methods: `GET` and `POST`
-- Query:
+- Query/body:
   - `window=earlybirds`
   - `window=latecomers`
+  - optional `countries` (comma-separated query or array in JSON body)
+  - optional `replaceCountries` and `resetBeforeInsert`
 - Default behavior: if `window` is omitted, it runs `earlybirds`.
+
+### Trigger Sync Endpoint
+
+- Route: `/api/trigger-sync`
+- Methods: `GET` and `POST`
+- Purpose: provider-neutral trigger endpoint for orchestrated sync calls
+- Query/body:
+  - `window=earlybirds|latecomers`
+  - optional `countries`
+  - optional `replaceCountries` and `resetBeforeInsert`
+- Defaults when options are omitted:
+  - `replaceCountries=true`
+  - `resetBeforeInsert=false`
 
 ### Manual Missing-Country Recovery Endpoint
 
@@ -108,9 +122,9 @@ curl "http://localhost:3000/api/retry-missing-countries?window=earlybirds"
 curl "http://localhost:3000/api/retry-missing-countries?window=earlybirds&countries=gb,fr,de"
 ```
 
-### Auth for `/api/fetch`
+### Auth for Scheduler Endpoints
 
-In `client/app/api/fetch/route.ts`, when `CRON_SECRET` is set, requests must include:
+When `CRON_SECRET` is set, scheduler requests must include:
 
 ```http
 Authorization: Bearer <CRON_SECRET>
@@ -118,26 +132,34 @@ Authorization: Bearer <CRON_SECRET>
 
 If `CRON_SECRET` is not set, auth check is bypassed.
 
-### Vercel Cron (External Scheduler)
+### External Scheduler Example
 
-Configured in `client/vercel.json`:
+You can use any scheduler (Cloud Scheduler, cron, CI/CD scheduled jobs, etc.) to hit:
 
-- `30 1 * * *` → `/api/fetch?window=earlybirds`
-- `30 13 * * *` → `/api/fetch?window=latecomers`
+- `/api/fetch?window=earlybirds`
+- `/api/fetch?window=latecomers`
 
-Make sure `CRON_SECRET` is also set in Vercel project environment variables.
+Example:
+
+```bash
+curl -X POST "https://<your-domain>/api/fetch?window=earlybirds" \
+  -H "Authorization: Bearer <CRON_SECRET>"
+```
 
 ## Data Flow Summary
 
-1. `/api/fetch` is triggered (manual call, internal scheduler, or Vercel cron).
+1. `/api/fetch` or `/api/trigger-sync` is triggered (manual call, internal scheduler, or external scheduler).
 2. `runNewsSync(window)` fetches third-party news by country group.
 3. Payload is validated with `ApiArticleSchema`.
 4. Database write strategy:
-   - `earlybirds` → delete existing + insert fresh batch
-   - `latecomers` → insert-only (dedupe via `skipDuplicates`)
+   - `/api/fetch` defaults:
+     - `earlybirds` → delete existing + insert fresh batch
+     - `latecomers` → insert-only (dedupe via `skipDuplicates`)
+   - `/api/trigger-sync` defaults:
+     - replace-countries mode (`replaceCountries=true`, `resetBeforeInsert=false`)
 
 ## Important Current Behaviors
 
 - The app attempts to create the target DB if it does not exist (`client/db/postgres_db.ts`).
 - DB connectivity errors are runtime errors (for example, wrong host/credentials, DB unavailable), not image build errors.
-- `client/vercel.json` is used only by Vercel deployment, not by local Docker Compose.
+- The `main` branch intentionally contains no platform-specific deployment integration.
