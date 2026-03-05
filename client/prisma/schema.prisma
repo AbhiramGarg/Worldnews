@@ -3,6 +3,7 @@
 // --- 1. Generator Block (Defines the Client) ---
 generator client {
   provider = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
 // --- 2. Datasource Block (Defines the Connection Type) ---
