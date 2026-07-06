@@ -357,7 +357,7 @@ const AboutPage = () => {
 
           <div>
             <a
-              href="https://unrivaled-pixie-161c66.netlify.app/"
+              href="https://gleeful-paletas-5eb1f4.netlify.app/"
               target="_blank"
               rel="noreferrer"
               style={{
